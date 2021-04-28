@@ -165,8 +165,8 @@ class MonodepthLoss(nn.modules.Module):
         right_pyramid = self.scale_pyramid(right, self.n)
 
         # Prepare disparities
-        disp_left_est = [d[:, 0, :, :].unsqueeze(1) for d in input]
-        disp_right_est = [d[:, 1, :, :].unsqueeze(1) for d in input]
+        disp_left_est = [d[:, 0, :, :].unsqueeze(1) for d in input]   # the left disparity
+        disp_right_est = [d[:, 1, :, :].unsqueeze(1) for d in input]  # the right disparity
 
         self.disp_left_est = disp_left_est
         self.disp_right_est = disp_right_est

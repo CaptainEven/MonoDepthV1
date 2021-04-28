@@ -7,6 +7,8 @@ import time
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import PIL.Image as pil
+
 import torch
 import torch.optim as optim
 from tqdm import tqdm
@@ -222,13 +224,13 @@ class Manager:
 
             # Define optimizer
             self.optimizer = optim.Adam(self.model.parameters(), lr=args.learning_rate)
-            self.val_n_imgs, self.val_loader = prepare_dataloader(args.val_data_dir,
-                                                                  args.mode,
-                                                                  args.augment_parameters,
-                                                                  False,
-                                                                  args.batch_size,
-                                                                  (args.input_height, args.input_width),
-                                                                  args.num_workers)
+            # self.n_val_imgs, self.val_loader = prepare_dataloader(args.val_data_dir,
+            #                                                       args.mode,
+            #                                                       args.augment_parameters,
+            #                                                       False,
+            #                                                       args.batch_size,
+            #                                                       (args.input_height, args.input_width),
+            #                                                       args.num_workers)
 
             # Set up checkpoint
             if args.is_resume:
@@ -241,7 +243,18 @@ class Manager:
                 print('Network is not resumed from a check point.')
 
         else:
+            self.n_val_imgs, self.val_loader = prepare_dataloader(args.val_data_dir,
+                                                                  args.mode,
+                                                                  args.augment_parameters,
+                                                                  False,
+                                                                  args.batch_size,
+                                                                  (args.input_height, args.input_width),
+                                                                  args.num_workers)
             # Set up checkpoint
+            if not os.path.isfile(args.model_path):
+                print('[Err]: invalid model checkpoint file.')
+                return
+
             self.model.load_state_dict(torch.load(args.model_path))
             print('Resumed from {:s}.'.format(args.model_path))
 
@@ -259,18 +272,19 @@ class Manager:
         self.input_height = args.input_height
         self.input_width = args.input_width
 
-        self.n_img, self.loader = prepare_dataloader(args.train_data_dir,
-                                                     args.mode,
-                                                     args.augment_parameters,
-                                                     args.do_augmentation,
-                                                     args.batch_size,
-                                                     (args.input_height, args.input_width),
-                                                     args.num_workers)
+        if self.args.mode == 'train':
+            self.n_train_imgs, self.loader = prepare_dataloader(args.train_data_dir,
+                                                                args.mode,
+                                                                args.augment_parameters,
+                                                                args.do_augmentation,
+                                                                args.batch_size,
+                                                                (args.input_height, args.input_width),
+                                                                args.num_workers)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-    def train(self, loss_freq=10, save_freq=100):
+    def train(self, loss_freq=10, save_freq=500):
         """
         :return:
         """
@@ -291,9 +305,10 @@ class Manager:
         #     loss = self.loss_function(disps, [left, right])
         #     val_losses.append(loss.item())
         #     self.running_val_loss += loss.item()
-        # self.running_val_loss /= self.val_n_img / self.args.batch_size
+        # self.running_val_loss /= self.n_val_imgs / self.args.batch_size
         # print('Val_loss:', self.running_val_loss)
 
+        self.avg_loss_list = []
         for epoch in range(self.args.epochs):
             if self.args.adjust_lr:
                 adjust_learning_rate(self.optimizer, epoch, self.args.learning_rate)
@@ -303,10 +318,10 @@ class Manager:
             ## train mode
             self.model.train()
 
-            self.epoch_avg_loss = []
             self.running_epoch_loss = 0.0
             self.running_batch_loss = 0.0
-            for batch_idx, data in tqdm(enumerate(self.loader)):
+            self.avg_loss = 0.0
+            for batch_idx, (data, left_img_path) in tqdm(enumerate(self.loader)):
                 # Load data
                 data = to_device(data, self.device)
                 left = data['left_image']
@@ -332,6 +347,7 @@ class Manager:
                             j += 1
                     plt.show()
 
+                ## TODO: save intermidiate results: the synthesized images...
                 if self.args.print_images:
                     print('disp_left_est[0]')
                     disp_left_est = self.loss_function.disp_left_est[0][0, :, :, :].cpu().detach().numpy()
@@ -353,13 +369,17 @@ class Manager:
                     plt.imshow(np.transpose(right_est, (1, 2, 0)))
                     plt.show()
 
+                # @even: loss
                 self.running_batch_loss += loss.item()
                 self.running_epoch_loss += loss.item()
 
                 if batch_idx != 0 and (batch_idx + 1) % loss_freq == 0:
-                    print('Batch {:05d}/{:05d} | Average loss of the last {:d} batches: {:5.3f}.'
-                          .format(batch_idx + 1, len(self.loader),
-                                  loss_freq, self.running_batch_loss / loss_freq))
+                    print('Epoch {:03d} | Batch {:05d}/{:05d} | Average loss of the last {:d} batches: {:5.3f}.'
+                          .format(epoch,
+                                  batch_idx + 1,
+                                  len(self.loader),
+                                  loss_freq,
+                                  self.running_batch_loss / loss_freq))
                     self.running_batch_loss = 0.0
 
                 if batch_idx != 0 and (batch_idx + 1) % save_freq == 0:
@@ -369,10 +389,14 @@ class Manager:
                     print('{:s} saved.'.format(save_ckpt_path))
 
             # Epoch avg loss for a batch
-            avg_loss = self.running_epoch_loss / float(len(self.loader))
-            print('Average loss of epoch{:d}: {:.3f}.'.format(epoch, avg_loss))
-            self.epoch_avg_loss.append(avg_loss)
-            print('Epoch average loss list:\n', self.epoch_avg_loss)
+            self.avg_loss = self.running_epoch_loss / float(len(self.loader))
+            print('Average loss of epoch{:d}: {:.3f}.'.format(epoch, self.avg_loss))
+            self.avg_loss_list.append(self.avg_loss)
+            print('Average loss list:\n', self.avg_loss_list)
+
+            # Reset loss statistics
+            self.running_epoch_loss = 0.0
+            self.avg_loss = 0.0
 
             ## evaluation mode
             self.model.eval()
@@ -388,11 +412,11 @@ class Manager:
             #     self.running_val_loss += loss.item()
 
             # Estimate loss per image
-            self.running_loss /= self.n_img / self.args.batch_size
-            # self.running_val_loss /= self.val_n_imgs / self.args.batch_size
+            # self.running_loss /= self.n_train_imgs / self.args.batch_size
+            # self.running_val_loss /= self.n_val_imgs / self.args.batch_size
 
             print('Epoch:', epoch + 1,
-                  'train_loss:', self.running_loss,
+                  'train_loss:', self.avg_loss,
                   # 'val_loss:', self.running_val_loss,
                   'time:', round(time.time() - c_time, 3), 's')
 
@@ -404,11 +428,77 @@ class Manager:
             #     print('Model checkpoint saved')
 
             self.save(self.args.model_path[:-4] + '_epoch{:d}_cpt.pth'.format(epoch))
-            best_val_loss = self.running_val_loss
+            # best_val_loss = self.running_val_loss
             print('Model checkpoint saved')
 
+        self.avg_loss_list = []
         print('Finished Training. Best loss:', best_loss)
         self.save(self.args.model_path)
+
+    def test(self):
+        """
+        :return:
+        """
+        print('Net input width: {:d}.'.format(self.args.input_width))
+
+        # Set evaluation mode
+        self.model.eval()
+
+        disparities = np.zeros((self.n_val_imgs, self.input_height, self.input_width),
+                               dtype=np.float32)
+        disparities_pp = np.zeros((self.n_val_imgs, self.input_height, self.input_width),
+                                  dtype=np.float32)
+
+        with torch.no_grad():
+            for i, (data, left_img_path) in tqdm(enumerate(self.val_loader)):
+                # Get the inputs
+                data = to_device(data, self.device)
+                left = data.squeeze()
+
+                # Do a forward pass
+                disps = self.model.forward(left)
+                disp = disps[0][:, 0, :, :].unsqueeze(1)
+                disparities[i] = disp[0].squeeze().cpu().numpy()  # only need the left disparity
+
+                # Get disparities after post processing
+                disparities_pp[i] = post_process_disparity(disps[0][:, 0, :, :].cpu().numpy())
+
+                # @even: Scale back from [0, 1] to metric disparity values
+                disp = disparities[i]
+                disp_pp = disparities_pp[i]
+                disp *= float(self.args.input_width)
+                disp_pp *= float(self.args.input_width)
+                disparities[i] = disp
+                disparities_pp[i] = disp_pp
+
+                # @even: save each stereo pair's disparity independantly
+                img_name = os.path.split(left_img_path[0])[-1].replace('.jpg', '')
+                disp_npy_path = self.output_directory + '/{:s}_disp.npy'.format(img_name)
+                disp_pp_npy_path = self.output_directory + '/{:s}_disp_pp.npy'.format(img_name)
+                np.save(disp_npy_path, disparities[i])
+                np.save(disp_pp_npy_path, disparities[i])
+                print('{:s} saved.'.format(disp_npy_path))
+                print('{:s} saved.'.format(disp_pp_npy_path))
+
+                # @even: save each stereo pair's disparity image independantly
+                disp_img_path = self.output_directory + '/{:s}_disp.png'.format(img_name)
+                disp_pp_img_path = self.output_directory + '/{:s}_disp_pp.png'.format(img_name)
+                disp_img = pil.fromarray(disp.astype('uint16'))
+                disp_pp_img = pil.fromarray(disp_pp.astype('uint16'))
+                disp_img.save(disp_img_path)
+                disp_pp_img.save(disp_pp_img_path)
+                print('{:s} saved.'.format(disp_img_path))
+                print('{:s} saved.'.format(disp_pp_img_path))
+
+        disps_f_path = self.output_directory + '/disparities.npy'
+        disps_pp_f_path = self.output_directory + '/disparities_pp.npy'
+        np.save(disps_f_path, disparities)
+        np.save(disps_pp_f_path, disparities_pp)
+        print('{:s} saved.'.format(disps_f_path))
+        print('{:s} saved.'.format(disps_pp_f_path))
+        print('Finished Testing.')
+
+        return disparities, disparities_pp
 
     def save(self, path):
         """
@@ -424,44 +514,6 @@ class Manager:
         """
         self.model.load_state_dict(torch.load(path))
 
-    def test(self):
-        """
-        :return:
-        """
-        self.model.eval()
-
-        disparities    = np.zeros((self.n_img, self.input_height, self.input_width),
-                               dtype=np.float32)
-        disparities_pp = np.zeros((self.n_img, self.input_height, self.input_width),
-                                  dtype=np.float32)
-
-        with torch.no_grad():
-            for (i, data) in tqdm(enumerate(self.loader)):
-                # Get the inputs
-                data = to_device(data, self.device)
-                left = data.squeeze()
-
-                # Do a forward pass
-                disps = self.model.forward(left)
-                disp = disps[0][:, 0, :, :].unsqueeze(1)
-                disparities[i] = disp[0].squeeze().cpu().numpy()
-
-                # Get disparities after post processing
-                disparities_pp[i] = post_process_disparity(disps[0][:, 0, :, :].cpu().numpy())
-
-                # @even: Scale back from [0, 1] to metric disparity values
-                disparities[i] *= float(self.args.input_width)
-                disparities_pp[i] *= float(self.args.input_width)
-
-        disps_f_path = self.output_directory + '/disparities.npy'
-        disps_pp_f_path = self.output_directory + '/disparities_pp.npy'
-        np.save(disps_f_path, disparities)
-        np.save(disps_pp_f_path, disparities_pp)
-        print('{:s} saved.'.format(disps_f_path))
-        print('{:s} saved.'.format(disps_pp_f_path))
-        print('Finished Testing')
-
-        return disparities, disparities_pp
 
 def run():
     """

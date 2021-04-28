@@ -127,7 +127,7 @@ def prepare_dataloader(root_dir,
     if mode == 'train':
         loader = DataLoader(dataset,
                             batch_size=batch_size,
-                            shuffle=True,
+                            shuffle=True,  # Do shuffle when trainig
                             num_workers=num_workers,
                             pin_memory=True)
         print('Using number of workers for training: {:d}.'.format(num_workers))
