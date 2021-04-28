@@ -4,11 +4,10 @@ import argparse
 import os
 import time
 
+import PIL.Image as pil
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import PIL.Image as pil
-
 import torch
 import torch.optim as optim
 from tqdm import tqdm
@@ -106,7 +105,7 @@ def return_arguments():
     parser.add_argument('--adjust_lr',
                         type=bool,
                         default=True,
-                        help='apply learning rate decay or not\
+                        help='apply learning rate decay or not \
                         (default: True)')
 
     parser.add_argument('--device',
@@ -174,8 +173,11 @@ def adjust_learning_rate(optimizer, epoch, learning_rate):
         lr = learning_rate / 4
     else:
         lr = learning_rate
+
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+
+    return lr
 
 
 def post_process_disparity(disp):
@@ -311,7 +313,7 @@ class Manager:
         self.avg_loss_list = []
         for epoch in range(self.args.epochs):
             if self.args.adjust_lr:
-                adjust_learning_rate(self.optimizer, epoch, self.args.learning_rate)
+                self.lr = adjust_learning_rate(self.optimizer, epoch, self.args.learning_rate)
 
             c_time = time.time()
 
@@ -374,12 +376,16 @@ class Manager:
                 self.running_epoch_loss += loss.item()
 
                 if batch_idx != 0 and (batch_idx + 1) % loss_freq == 0:
-                    print('Epoch {:03d} | Batch {:05d}/{:05d} | Average loss of the last {:d} batches: {:5.3f}.'
+                    print('Epoch {:03d}'
+                          ' | Batch {:05d}/{:05d}'
+                          ' | Average loss of the last {:d} batches: {:5.3f} '
+                          ' | learning rate: {:.3f}.'
                           .format(epoch,
                                   batch_idx + 1,
                                   len(self.loader),
                                   loss_freq,
-                                  self.running_batch_loss / loss_freq))
+                                  self.running_batch_loss / loss_freq,
+                                  self.lr))
                     self.running_batch_loss = 0.0
 
                 if batch_idx != 0 and (batch_idx + 1) % save_freq == 0:
